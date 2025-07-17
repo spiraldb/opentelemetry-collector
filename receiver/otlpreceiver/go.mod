@@ -1,4 +1,4 @@
-module github.com/spiraldb/opentelemetry-collector/receiver/otlpreceiver
+module go.opentelemetry.io/collector/receiver/otlpreceiver
 
 go 1.23.0
 
