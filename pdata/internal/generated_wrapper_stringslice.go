@@ -23,17 +23,15 @@ func NewStringSlice(orig *[]string, state *State) StringSlice {
 	return StringSlice{orig: orig, state: state}
 }
 
-func CopyOrigStringSlice(dst, src []string) []string {
-	dst = dst[:0]
-	return append(dst, src...)
-}
-
-func FillTestStringSlice(tv StringSlice) {
-}
-
 func GenerateTestStringSlice() StringSlice {
-	state := StateMutable
-	var orig []string = nil
+	orig := GenerateOrigTestStringSlice()
+	return NewStringSlice(&orig, NewState())
+}
 
-	return StringSlice{&orig, &state}
+func CopyOrigStringSlice(dst, src []string) []string {
+	return append(dst[:0], src...)
+}
+
+func GenerateOrigTestStringSlice() []string {
+	return []string{"a", "b", "c"}
 }

@@ -23,17 +23,15 @@ func NewByteSlice(orig *[]byte, state *State) ByteSlice {
 	return ByteSlice{orig: orig, state: state}
 }
 
-func CopyOrigByteSlice(dst, src []byte) []byte {
-	dst = dst[:0]
-	return append(dst, src...)
-}
-
-func FillTestByteSlice(tv ByteSlice) {
-}
-
 func GenerateTestByteSlice() ByteSlice {
-	state := StateMutable
-	var orig []byte = nil
+	orig := GenerateOrigTestByteSlice()
+	return NewByteSlice(&orig, NewState())
+}
 
-	return ByteSlice{&orig, &state}
+func CopyOrigByteSlice(dst, src []byte) []byte {
+	return append(dst[:0], src...)
+}
+
+func GenerateOrigTestByteSlice() []byte {
+	return []byte{1, 2, 3}
 }

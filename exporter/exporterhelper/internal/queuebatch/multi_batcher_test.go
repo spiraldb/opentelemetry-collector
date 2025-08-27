@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/exporter/exporterhelper/internal/request"
@@ -32,7 +33,9 @@ func TestMultiBatcher_NoTimeout(t *testing.T) {
 		NewPartitioner(func(ctx context.Context, _ request.Request) string {
 			return ctx.Value(partitionKey{}).(string)
 		}),
+		nil,
 		sink.Export,
+		zap.NewNop(),
 	)
 
 	require.NoError(t, ba.Start(context.Background(), componenttest.NewNopHost()))
@@ -83,7 +86,9 @@ func TestMultiBatcher_Timeout(t *testing.T) {
 		NewPartitioner(func(ctx context.Context, _ request.Request) string {
 			return ctx.Value(partitionKey{}).(string)
 		}),
+		nil,
 		sink.Export,
+		zap.NewNop(),
 	)
 
 	require.NoError(t, ba.Start(context.Background(), componenttest.NewNopHost()))
