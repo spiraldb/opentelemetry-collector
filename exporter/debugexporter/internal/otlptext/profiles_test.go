@@ -56,18 +56,18 @@ func extendProfiles(profiles pprofile.Profiles) pprofile.Profiles {
 	location := dic.LocationTable().AppendEmpty()
 	location.SetMappingIndex(3)
 	location.SetAddress(4)
-	line := location.Line().AppendEmpty()
+	line := location.Lines().AppendEmpty()
 	line.SetFunctionIndex(1)
 	line.SetLine(2)
 	line.SetColumn(3)
-	location.SetIsFolded(true)
 	location.AttributeIndices().FromRaw([]int32{6, 7})
+	dic.StringTable().Append("intValue")
 	at := dic.AttributeTable()
 	a := at.AppendEmpty()
-	a.SetKey("intValue")
+	a.SetKeyStrindex(1)
 	a.Value().SetInt(42)
-	attributeUnits := dic.AttributeUnits().AppendEmpty()
-	attributeUnits.SetAttributeKeyStrindex(1)
+	attributeUnits := dic.AttributeTable().AppendEmpty()
+	attributeUnits.SetKeyStrindex(2)
 	attributeUnits.SetUnitStrindex(5)
 	dic.StringTable().Append("foobar")
 	mapping := dic.MappingTable().AppendEmpty()
@@ -76,10 +76,6 @@ func extendProfiles(profiles pprofile.Profiles) pprofile.Profiles {
 	mapping.SetFileOffset(4)
 	mapping.SetFilenameStrindex(5)
 	mapping.AttributeIndices().FromRaw([]int32{7, 8})
-	mapping.SetHasFunctions(true)
-	mapping.SetHasFilenames(true)
-	mapping.SetHasLineNumbers(true)
-	mapping.SetHasInlineFrames(true)
 	function := dic.FunctionTable().AppendEmpty()
 	function.SetNameStrindex(2)
 	function.SetSystemNameStrindex(3)
@@ -92,14 +88,10 @@ func extendProfiles(profiles pprofile.Profiles) pprofile.Profiles {
 
 	sc := profiles.ResourceProfiles().At(0).ScopeProfiles().At(0)
 	profilesCount := profiles.ResourceProfiles().At(0).ScopeProfiles().At(0).Profiles().Len()
-	for i := 0; i < profilesCount; i++ {
-		switch i % 2 {
-		case 0:
+	for i := range profilesCount {
+		if i%2 == 0 {
 			profile := sc.Profiles().At(i)
-			profile.LocationIndices().FromRaw([]int32{1})
-		case 1:
-			profile := sc.Profiles().At(i)
-			profile.CommentStrindices().FromRaw([]int32{1, 2})
+			profile.AttributeIndices().FromRaw([]int32{1})
 		}
 	}
 	return profiles
@@ -115,17 +107,15 @@ func generateProfilesWithEntityRefs() pprofile.Profiles {
 	sp.Scope().SetName("test-scope")
 	profile := sp.Profiles().AppendEmpty()
 
-	sample := profile.Sample().AppendEmpty()
-	sample.SetLocationsStartIndex(0)
-	sample.SetLocationsLength(1)
-	sample.Value().FromRaw([]int64{100})
+	sample := profile.Samples().AppendEmpty()
+	sample.Values().Append(100)
 
 	dic := pd.Dictionary()
 	dic.StringTable().Append("")
 	dic.StringTable().Append("cpu")
 	dic.StringTable().Append("nanoseconds")
 
-	sampleType := profile.SampleType().AppendEmpty()
+	sampleType := profile.SampleType()
 	sampleType.SetTypeStrindex(1)
 	sampleType.SetUnitStrindex(2)
 

@@ -793,7 +793,7 @@ func TestGRPCMaxRecvSize(t *testing.T) {
 	sink := newErrOrSinkConsumer()
 
 	cfg := createDefaultConfig().(*Config)
-	GetOrInsertDefault(t, &cfg.GRPC).NetAddr.Endpoint = addr
+	cfg.GRPC.GetOrInsertDefault().NetAddr.Endpoint = addr
 	recv := newReceiver(t, componenttest.NewNopTelemetrySettings(), cfg, otlpReceiverID, sink)
 	require.NoError(t, recv.Start(context.Background(), componenttest.NewNopHost()))
 
@@ -898,13 +898,13 @@ func TestHTTPMaxRequestBodySize(t *testing.T) {
 
 func newGRPCReceiver(t *testing.T, settings component.TelemetrySettings, endpoint string, c consumertest.Consumer) component.Component {
 	cfg := createDefaultConfig().(*Config)
-	GetOrInsertDefault(t, &cfg.GRPC).NetAddr.Endpoint = endpoint
+	cfg.GRPC.GetOrInsertDefault().NetAddr.Endpoint = endpoint
 	return newReceiver(t, settings, cfg, otlpReceiverID, c)
 }
 
 func newHTTPReceiver(t *testing.T, settings component.TelemetrySettings, endpoint string, c consumertest.Consumer) component.Component {
 	cfg := createDefaultConfig().(*Config)
-	GetOrInsertDefault(t, &cfg.HTTP).ServerConfig.Endpoint = endpoint
+	cfg.HTTP.GetOrInsertDefault().ServerConfig.Endpoint = endpoint
 	return newReceiver(t, settings, cfg, otlpReceiverID, c)
 }
 
@@ -1084,8 +1084,8 @@ func TestShutdown(t *testing.T) {
 	// Create OTLP receiver with gRPC and HTTP protocols.
 	factory := NewFactory()
 	cfg := factory.CreateDefaultConfig().(*Config)
-	GetOrInsertDefault(t, &cfg.GRPC).NetAddr.Endpoint = endpointGrpc
-	GetOrInsertDefault(t, &cfg.HTTP).ServerConfig.Endpoint = endpointHTTP
+	cfg.GRPC.GetOrInsertDefault().NetAddr.Endpoint = endpointGrpc
+	cfg.HTTP.GetOrInsertDefault().ServerConfig.Endpoint = endpointHTTP
 	set := receivertest.NewNopSettings(metadata.Type)
 	set.ID = otlpReceiverID
 	r, err := NewFactory().CreateTraces(
@@ -1322,7 +1322,7 @@ func assertReceiverTraces(t *testing.T, tt *componenttest.Telemetry, id componen
 	metricdatatest.AssertEqual(t,
 		metricdata.Metrics{
 			Name:        "otelcol_receiver_failed_spans",
-			Description: "The number of spans that failed to be processed by the receiver due to internal errors. [alpha]",
+			Description: "The number of spans that failed to be processed by the receiver due to internal errors. [Alpha]",
 			Unit:        "{spans}",
 			Data: metricdata.Sum[int64]{
 				Temporality: metricdata.CumulativeTemporality,
@@ -1343,7 +1343,7 @@ func assertReceiverTraces(t *testing.T, tt *componenttest.Telemetry, id componen
 	metricdatatest.AssertEqual(t,
 		metricdata.Metrics{
 			Name:        "otelcol_receiver_accepted_spans",
-			Description: "Number of spans successfully pushed into the pipeline. [alpha]",
+			Description: "Number of spans successfully pushed into the pipeline. [Alpha]",
 			Unit:        "{spans}",
 			Data: metricdata.Sum[int64]{
 				Temporality: metricdata.CumulativeTemporality,
@@ -1364,7 +1364,7 @@ func assertReceiverTraces(t *testing.T, tt *componenttest.Telemetry, id componen
 	metricdatatest.AssertEqual(t,
 		metricdata.Metrics{
 			Name:        "otelcol_receiver_refused_spans",
-			Description: "Number of spans that could not be pushed into the pipeline. [alpha]",
+			Description: "Number of spans that could not be pushed into the pipeline. [Alpha]",
 			Unit:        "{spans}",
 			Data: metricdata.Sum[int64]{
 				Temporality: metricdata.CumulativeTemporality,
@@ -1441,7 +1441,7 @@ func assertReceiverMetrics(t *testing.T, tt *componenttest.Telemetry, id compone
 	metricdatatest.AssertEqual(t,
 		metricdata.Metrics{
 			Name:        "otelcol_receiver_failed_metric_points",
-			Description: "The number of metric points that failed to be processed by the receiver due to internal errors. [alpha]",
+			Description: "The number of metric points that failed to be processed by the receiver due to internal errors. [Alpha]",
 			Unit:        "{datapoints}",
 			Data: metricdata.Sum[int64]{
 				Temporality: metricdata.CumulativeTemporality,
@@ -1462,7 +1462,7 @@ func assertReceiverMetrics(t *testing.T, tt *componenttest.Telemetry, id compone
 	metricdatatest.AssertEqual(t,
 		metricdata.Metrics{
 			Name:        "otelcol_receiver_accepted_metric_points",
-			Description: "Number of metric points successfully pushed into the pipeline. [alpha]",
+			Description: "Number of metric points successfully pushed into the pipeline. [Alpha]",
 			Unit:        "{datapoints}",
 			Data: metricdata.Sum[int64]{
 				Temporality: metricdata.CumulativeTemporality,
@@ -1483,7 +1483,7 @@ func assertReceiverMetrics(t *testing.T, tt *componenttest.Telemetry, id compone
 	metricdatatest.AssertEqual(t,
 		metricdata.Metrics{
 			Name:        "otelcol_receiver_refused_metric_points",
-			Description: "Number of metric points that could not be pushed into the pipeline. [alpha]",
+			Description: "Number of metric points that could not be pushed into the pipeline. [Alpha]",
 			Unit:        "{datapoints}",
 			Data: metricdata.Sum[int64]{
 				Temporality: metricdata.CumulativeTemporality,

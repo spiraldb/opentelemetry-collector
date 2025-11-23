@@ -7,6 +7,169 @@ If you are looking for user-facing changes, check out [CHANGELOG.md](./CHANGELOG
 
 <!-- next version -->
 
+## v1.46.0/v0.140.0
+
+### 🛑 Breaking changes 🛑
+
+- `pdata/pprofile`: Upgrade the OTLP protobuf definitions to version 1.9.0 (#14128)
+  * Drop field `CommentStrindices` in `Profile`.
+  * Rename `Sample` to `Samples` in `Profile`.
+  * Rename `Line` to `Lines` in `Location`.
+  * Remove `AggregationTemporality` field in `ValueType`.
+  
+  See https://github.com/open-telemetry/opentelemetry-proto/releases/tag/v1.9.0
+  
+- `pkg/otelcol`: The `otelcol.Factories.Telemetry` field is now required (#14003)
+  Previously if this field was not set, then it would default to an otelconftelemetry factory.
+  Callers of the otelcol package must now set the field explicitly.
+  
+
+### 💡 Enhancements 💡
+
+- `pkg/pdata`: Upgrade the OTLP protobuf definitions to version 1.9.0 (#14128)
+
+<!-- previous-version -->
+
+## v1.45.0/v0.139.0
+
+### 🛑 Breaking changes 🛑
+
+- `all`: Change type of `configgrpc.ClientConfig.Headers`, `confighttp.ClientConfig.Headers`, and `confighttp.ServerConfig.ResponseHeaders` (#13930)
+  `configopaque.MapList` is a new alternative to `map[string]configopaque.String` which can unmarshal
+  both maps and lists of name/value pairs.
+  
+  For example, if `headers` is a field of type `configopaque.MapList`,
+  then the following YAML configs will unmarshal to the same thing:
+  ```yaml
+  headers:
+    "foo": "bar"
+  
+  headers:
+  - name: "foo"
+    value: "bar"
+  ```
+  
+- `pdata/pprofile`: Update `SetFunction` to return the function's ID rather than update the Line (#14016, #14032)
+- `pdata/pprofile`: Update `SetLink` to return the link's ID rather than update the Sample (#14016, #14031)
+- `pdata/pprofile`: Update `SetMapping` to return the mapping's ID rather than update the Location (#14016, #14030)
+- `pkg/otelcol`: Require a telemetry factory to be injected through otelcol.Factories (#4970)
+  otelcol.Factories now has a required Telemetry field,
+  which contains the telemetry factory to be used by the service.
+  Set it to otelconftelemetry.NewFactory() for the existing behavior.
+  
+- `pkg/pdata`: Remove unused generated code from pprofile (#14073)
+  Experimental package, ok to break since not used.
+
+### 💡 Enhancements 💡
+
+- `pdata/pprofile`: Introduce `SetStack` method (#14007)
+- `pdata/xpdata`: Add high-level Entity API for managing entities attached to resources (#14042)
+  Introduces `Entity`, `EntitySlice`, and `EntityAttributeMap` types that provide a user-friendly interface
+  for working with resource entities. The new API ensures consistency between entity and resource attributes
+  by sharing the underlying attribute map, and prevents attribute conflicts between entities. This API may
+  eventually replace the generated protobuf-based API for better usability.
+  
+
+### 🧰 Bug fixes 🧰
+
+- `cmd/mdatagen`: Fix mdatagen generated_metrics for connectors (#12402)
+
+<!-- previous-version -->
+
+## v1.44.0/v0.138.0
+
+### 🛑 Breaking changes 🛑
+
+- `pkg/xexporterhelper`: Remove definition of Sizer from public API and ability to configure. (#14001)
+  Now that Request has both Items/Bytes sizes no need to allow custom sizers.
+  
+- `pkg/service`: The `service.Settings` type now requires a `telemetry.Factory` to be provided (#4970)
+
+### 🚩 Deprecations 🚩
+
+- `pdata/pprofile`: Deprecated `PutAttribute` helper method (#14016, #14041)
+- `pdata/pprofile`: Deprecated `PutLocation` helper method (#14019)
+
+### 💡 Enhancements 💡
+
+- `all`: Add `keep_alives_enabled` option to ServerConfig to control HTTP keep-alives for all components that create an HTTP server. (#13783)
+- `pkg/pdata`: Add pcommon.Map helper to add a key to the map if does not exists (#14023)
+- `pdata/pprofile`: Introduce `Equal` method on the `KeyValueAndUnit` type (#14041)
+- `pkg/pdata`: Add `RemoveIf` method to primitive slice types (StringSlice, Int64Slice, UInt64Slice, Float64Slice, Int32Slice, ByteSlice) (#14027)
+- `pdata/pprofile`: Introduce `SetAttribute` helper method (#14016, #14041)
+- `pdata/pprofile`: Introduce `SetLocation` helper method (#14019)
+- `pdata/pprofile`: Introduce `Equal` method on the `Stack` type (#13952)
+
+<!-- previous-version -->
+
+## v1.43.0/v0.137.0
+
+### 🛑 Breaking changes 🛑
+
+- `pkg/exporterhelper`: Remove all experimental symbols in exporterhelper (#11143)
+  They have all been moved to xexporterhelper
+  
+
+### 🚩 Deprecations 🚩
+
+- `all`: service/telemetry.TracesConfig is deprecated (#13904)
+  This type alias has been added to otelconftelemetry.TracesConfig,
+  where the otelconf-based telemetry implementation now lives.
+  
+
+### 💡 Enhancements 💡
+
+- `all`: Mark configoptional as stable (#13403)
+- `all`: Mark configauth module as 1.0 (#9476)
+- `pkg/pdata`: Mark featuregate pdata.useCustomProtoEncoding as stable (#13883)
+
+<!-- previous-version -->
+
+## v1.42.0/v0.136.0
+
+### 🛑 Breaking changes 🛑
+
+- `exporterhelper`: Remove deprecated function NewRequestsSizer (#13803)
+- `pdata/pprofile`: Upgrade the OTLP protobuf definitions to version 1.8.0 (#13758, #13825, #13839)
+- `pdata/pprofile`: Remove deprecated ProfilesDictionary method (#13858)
+
+### 🚩 Deprecations 🚩
+
+- `exporterhelper`: Deprecate all experimental symbols in exporterhelper and move them to xexporterhelper (#11143)
+
+### 💡 Enhancements 💡
+
+- `configoptional`: Add `GetOrInsertDefault` method to `configoptional.Optional` (#13856)
+  This method inserts a default or zero value into a `None`/`Default` `Optional` before `Get`ting its inner value.
+  
+- `exporter`: Stabilize exporter module. (#12978)
+  This does not stabilize the exporterhelper module or configuration
+- `pdata`: Upgrade the OTLP protobuf definitions to version 1.8.0 (#13758)
+
+<!-- previous-version -->
+
+## v1.41.0/v0.135.0
+
+### 🛑 Breaking changes 🛑
+
+- `pdata/pprofile`: Remove deprecated AddAttribute method (#13764)
+
+### 💡 Enhancements 💡
+
+- `configmiddleware`: Stabilize `configmiddleware` module (#13422)
+  This only stabilizes the configuration interface but does not stabilize the middlewares themselves or the way of implementing them.
+- `xpdata`: Add experimental MapBuilder struct to optimize pcommon.Map construction (#13617)
+
+<!-- previous-version -->
+
+## v1.40.0/v0.134.0
+
+### 💡 Enhancements 💡
+
+- `exporterhelper`: Split exporterhelper into a separate module (#12985)
+
+<!-- previous-version -->
+
 ## v1.39.0/v0.133.0
 
 ### 🛑 Breaking changes 🛑
