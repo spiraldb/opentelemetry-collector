@@ -207,7 +207,7 @@ func errorHandler(w http.ResponseWriter, r *http.Request, errMsg string, statusC
 		writeStatusResponse(w, jsEncoder, statusCode, s)
 		return
 	}
-	writeResponse(w, fallbackContentType, http.StatusInternalServerError, fallbackMsg)
+	writeStatusResponse(w, jsEncoder, statusCode, s)
 }
 
 func writeStatusResponse(w http.ResponseWriter, enc encoder, statusCode int, st *status.Status) {
