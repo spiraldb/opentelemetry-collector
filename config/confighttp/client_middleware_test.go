@@ -32,30 +32,32 @@ type testClientMiddleware struct {
 func newTestClientMiddleware(name string) component.Component {
 	return &testClientMiddleware{
 		Extension: extensionmiddlewaretest.NewNop(),
-		GetHTTPRoundTripperFunc: func(transport http.RoundTripper) (http.RoundTripper, error) {
-			return extensionmiddlewaretest.RoundTripperFunc(
-				func(req *http.Request) (*http.Response, error) {
-					resp, err := transport.RoundTrip(req)
-					if err != nil {
-						return resp, err
-					}
+		GetHTTPRoundTripperFunc: func(_ context.Context) (extensionmiddleware.WrapHTTPRoundTripperFunc, error) {
+			return func(_ context.Context, transport http.RoundTripper) (http.RoundTripper, error) {
+				return extensionmiddlewaretest.RoundTripperFunc(
+					func(req *http.Request) (*http.Response, error) {
+						resp, err := transport.RoundTrip(req)
+						if err != nil {
+							return resp, err
+						}
 
-					// Read the original body
-					body, err := io.ReadAll(resp.Body)
-					if err != nil {
-						return resp, err
-					}
-					_ = resp.Body.Close()
+						// Read the original body
+						body, err := io.ReadAll(resp.Body)
+						if err != nil {
+							return resp, err
+						}
+						_ = resp.Body.Close()
 
-					// Create a new body with the appended text
-					newBody := string(body) + "\r\noutput by " + name
+						// Create a new body with the appended text
+						newBody := string(body) + "\r\noutput by " + name
 
-					// Replace the response body
-					resp.Body = io.NopCloser(strings.NewReader(newBody))
-					resp.ContentLength = int64(len(newBody))
+						// Replace the response body
+						resp.Body = io.NopCloser(strings.NewReader(newBody))
+						resp.ContentLength = int64(len(newBody))
 
-					return resp, nil
-				}), nil
+						return resp, nil
+					}), nil
+			}, nil
 		},
 	}
 }
@@ -75,11 +77,9 @@ func TestClientMiddlewares(t *testing.T) {
 	defer server.Close()
 
 	// Register two test extensions
-	host := &mockHost{
-		ext: map[component.ID]component.Component{
-			component.MustNewID("test1"): newTestClientMiddleware("test1"),
-			component.MustNewID("test2"): newTestClientMiddleware("test2"),
-		},
+	extensions := map[component.ID]component.Component{
+		component.MustNewID("test1"): newTestClientMiddleware("test1"),
+		component.MustNewID("test2"): newTestClientMiddleware("test2"),
 	}
 
 	// Test with different middleware configurations
@@ -119,7 +119,7 @@ func TestClientMiddlewares(t *testing.T) {
 			}
 
 			// Create the client
-			client, err := clientConfig.ToClient(context.Background(), host, componenttest.NewNopTelemetrySettings())
+			client, err := clientConfig.ToClient(context.Background(), extensions, componenttest.NewNopTelemetrySettings())
 			require.NoError(t, err)
 
 			// Create a request to the test server
@@ -149,16 +149,14 @@ func TestClientMiddlewareErrors(t *testing.T) {
 
 	// Test cases for HTTP client middleware errors
 	httpTests := []struct {
-		name    string
-		host    component.Host
-		config  ClientConfig
-		errText string
+		name       string
+		extensions map[component.ID]component.Component
+		config     ClientConfig
+		errText    string
 	}{
 		{
-			name: "extension_not_found",
-			host: &mockHost{
-				ext: map[component.ID]component.Component{},
-			},
+			name:       "extension_not_found",
+			extensions: map[component.ID]component.Component{},
 			config: ClientConfig{
 				Endpoint: server.URL,
 				Middlewares: []configmiddleware.Config{
@@ -171,10 +169,8 @@ func TestClientMiddlewareErrors(t *testing.T) {
 		},
 		{
 			name: "get_round_tripper_fails",
-			host: &mockHost{
-				ext: map[component.ID]component.Component{
-					component.MustNewID("errormw"): extensionmiddlewaretest.NewErr(errors.New("http middleware error")),
-				},
+			extensions: map[component.ID]component.Component{
+				component.MustNewID("errormw"): extensionmiddlewaretest.NewErr(errors.New("http middleware error")),
 			},
 			config: ClientConfig{
 				Endpoint: server.URL,
@@ -191,7 +187,7 @@ func TestClientMiddlewareErrors(t *testing.T) {
 	for _, tc := range httpTests {
 		t.Run(tc.name, func(t *testing.T) {
 			// Trying to create the client should fail
-			_, err := tc.config.ToClient(context.Background(), tc.host, componenttest.NewNopTelemetrySettings())
+			_, err := tc.config.ToClient(context.Background(), tc.extensions, componenttest.NewNopTelemetrySettings())
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.errText)
 		})
@@ -203,16 +199,14 @@ func TestClientMiddlewareErrors(t *testing.T) {
 func TestGRPCClientMiddlewareErrors(t *testing.T) {
 	// Test cases for gRPC client middleware errors
 	grpcTests := []struct {
-		name    string
-		host    component.Host
-		config  ClientConfig
-		errText string
+		name       string
+		extensions map[component.ID]component.Component
+		config     ClientConfig
+		errText    string
 	}{
 		{
-			name: "grpc_extension_not_found",
-			host: &mockHost{
-				ext: map[component.ID]component.Component{},
-			},
+			name:       "grpc_extension_not_found",
+			extensions: map[component.ID]component.Component{},
 			config: ClientConfig{
 				Endpoint: "localhost:1234",
 				Middlewares: []configmiddleware.Config{
@@ -225,10 +219,8 @@ func TestGRPCClientMiddlewareErrors(t *testing.T) {
 		},
 		{
 			name: "grpc_get_client_options_fails",
-			host: &mockHost{
-				ext: map[component.ID]component.Component{
-					component.MustNewID("errormw"): extensionmiddlewaretest.NewErr(errors.New("grpc middleware error")),
-				},
+			extensions: map[component.ID]component.Component{
+				component.MustNewID("errormw"): extensionmiddlewaretest.NewErr(errors.New("grpc middleware error")),
 			},
 			config: ClientConfig{
 				Endpoint: "localhost:1234",
@@ -247,7 +239,7 @@ func TestGRPCClientMiddlewareErrors(t *testing.T) {
 			// For gRPC, we need to use the configgrpc.ClientConfig structure
 			// We'll test the middleware failure path here using the HTTP client approach,
 			// as the middleware resolution logic is the same
-			_, err := tc.config.ToClient(context.Background(), tc.host, componenttest.NewNopTelemetrySettings())
+			_, err := tc.config.ToClient(context.Background(), tc.extensions, componenttest.NewNopTelemetrySettings())
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.errText)
 		})
