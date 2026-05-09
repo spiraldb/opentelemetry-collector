@@ -11,9 +11,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.opentelemetry.io/collector/config/configoptional/internal/metadata"
 	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
-	"go.opentelemetry.io/collector/confmap/xconfmap"
 	"go.opentelemetry.io/collector/featuregate"
 )
 
@@ -511,9 +511,11 @@ func TestAddFieldEnabledFeatureGate(t *testing.T) {
 		},
 	}
 
-	oldVal := addEnabledFieldFeatureGate.IsEnabled()
-	require.NoError(t, featuregate.GlobalRegistry().Set(addEnabledFieldFeatureGateID, true))
-	defer func() { require.NoError(t, featuregate.GlobalRegistry().Set(addEnabledFieldFeatureGateID, oldVal)) }()
+	oldVal := metadata.ConfigoptionalAddEnabledFieldFeatureGate.IsEnabled()
+	require.NoError(t, featuregate.GlobalRegistry().Set(metadata.ConfigoptionalAddEnabledFieldFeatureGate.ID(), true))
+	defer func() {
+		require.NoError(t, featuregate.GlobalRegistry().Set(metadata.ConfigoptionalAddEnabledFieldFeatureGate.ID(), oldVal))
+	}()
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -529,9 +531,11 @@ func TestAddFieldEnabledFeatureGate(t *testing.T) {
 }
 
 func TestEnabledFalseResetsValue(t *testing.T) {
-	oldVal := addEnabledFieldFeatureGate.IsEnabled()
-	require.NoError(t, featuregate.GlobalRegistry().Set(addEnabledFieldFeatureGateID, true))
-	defer func() { require.NoError(t, featuregate.GlobalRegistry().Set(addEnabledFieldFeatureGateID, oldVal)) }()
+	oldVal := metadata.ConfigoptionalAddEnabledFieldFeatureGate.IsEnabled()
+	require.NoError(t, featuregate.GlobalRegistry().Set(metadata.ConfigoptionalAddEnabledFieldFeatureGate.ID(), true))
+	defer func() {
+		require.NoError(t, featuregate.GlobalRegistry().Set(metadata.ConfigoptionalAddEnabledFieldFeatureGate.ID(), oldVal))
+	}()
 
 	cfg := Config[Sub]{Sub1: Some(Sub{Foo: "initial"})}
 	require.True(t, cfg.Sub1.HasValue())
@@ -544,9 +548,11 @@ func TestEnabledFalseResetsValue(t *testing.T) {
 }
 
 func TestUnmarshalErrorEnabledInvalidType(t *testing.T) {
-	oldVal := addEnabledFieldFeatureGate.IsEnabled()
-	require.NoError(t, featuregate.GlobalRegistry().Set(addEnabledFieldFeatureGateID, true))
-	defer func() { require.NoError(t, featuregate.GlobalRegistry().Set(addEnabledFieldFeatureGateID, oldVal)) }()
+	oldVal := metadata.ConfigoptionalAddEnabledFieldFeatureGate.IsEnabled()
+	require.NoError(t, featuregate.GlobalRegistry().Set(metadata.ConfigoptionalAddEnabledFieldFeatureGate.ID(), true))
+	defer func() {
+		require.NoError(t, featuregate.GlobalRegistry().Set(metadata.ConfigoptionalAddEnabledFieldFeatureGate.ID(), oldVal))
+	}()
 
 	cm := confmap.NewFromStringMap(map[string]any{
 		"sub": map[string]any{
@@ -764,20 +770,20 @@ func (invalid) Validate() error {
 	return errors.New("invalid")
 }
 
-var _ xconfmap.Validator = invalid{}
+var _ confmap.Validator = invalid{}
 
 type hasNested struct {
 	CouldBe Optional[invalid]
 }
 
 func TestOptionalValidate(t *testing.T) {
-	require.NoError(t, xconfmap.Validate(hasNested{
+	require.NoError(t, confmap.Validate(hasNested{
 		CouldBe: None[invalid](),
 	}))
-	require.NoError(t, xconfmap.Validate(hasNested{
+	require.NoError(t, confmap.Validate(hasNested{
 		CouldBe: Default(invalid{}),
 	}))
-	require.Error(t, xconfmap.Validate(hasNested{
+	require.Error(t, confmap.Validate(hasNested{
 		CouldBe: Some(invalid{}),
 	}))
 }
@@ -787,7 +793,7 @@ type validatedConfig struct {
 	Some    Optional[someConfig]     `mapstructure:"some"`
 }
 
-var _ xconfmap.Validator = (*optionalConfig)(nil)
+var _ confmap.Validator = (*optionalConfig)(nil)
 
 type optionalConfig struct {
 	StringVal string `mapstructure:"string_val"`
@@ -868,7 +874,7 @@ func TestOptionalFileValidate(t *testing.T) {
 			err = conf.Unmarshal(&cfg)
 			require.NoError(t, err)
 
-			err = xconfmap.Validate(cfg)
+			err = confmap.Validate(cfg)
 			if tt.err == nil {
 				require.NoError(t, err)
 			} else {

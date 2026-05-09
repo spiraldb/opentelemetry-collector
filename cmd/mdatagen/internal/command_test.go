@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.opentelemetry.io/collector/cmd/mdatagen/internal/cfggen"
 	"go.opentelemetry.io/collector/component"
 )
 
@@ -76,8 +77,11 @@ func TestRunContents(t *testing.T) {
 		wantGoleakSetup                 bool
 		wantGoleakTeardown              bool
 		wantFeatureGatesGenerated       bool
+		wantConfigSchemaGenerated       bool
+		wantMetricsSchemaYamlGenerated  bool
 		wantErr                         bool
 		wantOrderErr                    bool
+		wantRunErr                      bool
 		wantAttributes                  []string
 	}{
 		{
@@ -110,12 +114,13 @@ func TestRunContents(t *testing.T) {
 			wantReadmeGenerated: true,
 		},
 		{
-			yml:                        "metrics_and_type.yaml",
-			wantMetricsGenerated:       true,
-			wantConfigGenerated:        true,
-			wantStatusGenerated:        true,
-			wantReadmeGenerated:        true,
-			wantComponentTestGenerated: true,
+			yml:                            "metrics_and_type.yaml",
+			wantMetricsGenerated:           true,
+			wantConfigGenerated:            true,
+			wantStatusGenerated:            true,
+			wantReadmeGenerated:            true,
+			wantComponentTestGenerated:     true,
+			wantMetricsSchemaYamlGenerated: true,
 		},
 		{
 			yml:                             "resource_attributes_only.yaml",
@@ -125,6 +130,7 @@ func TestRunContents(t *testing.T) {
 			wantReadmeGenerated:             true,
 			wantComponentTestGenerated:      true,
 			wantLogsGenerated:               true,
+			wantMetricsSchemaYamlGenerated:  true,
 		},
 		{
 			yml:                        "status_only.yaml",
@@ -213,12 +219,13 @@ func TestRunContents(t *testing.T) {
 			wantComponentTestGenerated: true,
 		},
 		{
-			yml:                        "async_metric.yaml",
-			wantMetricsGenerated:       true,
-			wantConfigGenerated:        true,
-			wantStatusGenerated:        true,
-			wantReadmeGenerated:        true,
-			wantComponentTestGenerated: true,
+			yml:                            "async_metric.yaml",
+			wantMetricsGenerated:           true,
+			wantConfigGenerated:            true,
+			wantStatusGenerated:            true,
+			wantReadmeGenerated:            true,
+			wantComponentTestGenerated:     true,
+			wantMetricsSchemaYamlGenerated: true,
 		},
 		{
 			yml:                        "custom_generated_package_name.yaml",
@@ -235,22 +242,36 @@ func TestRunContents(t *testing.T) {
 			wantFeatureGatesGenerated:  true,
 		},
 		{
-			yml:                        "with_conditional_attribute.yaml",
-			wantStatusGenerated:        true,
-			wantReadmeGenerated:        true,
-			wantMetricsGenerated:       true,
-			wantLogsGenerated:          true,
-			wantConfigGenerated:        true,
-			wantComponentTestGenerated: true,
+			yml:                            "with_conditional_attribute.yaml",
+			wantStatusGenerated:            true,
+			wantReadmeGenerated:            true,
+			wantMetricsGenerated:           true,
+			wantLogsGenerated:              true,
+			wantConfigGenerated:            true,
+			wantComponentTestGenerated:     true,
+			wantMetricsSchemaYamlGenerated: true,
 		},
 		{
-			yml:                        "events/basic_event.yaml",
+			yml:                            "events/basic_event.yaml",
+			wantStatusGenerated:            true,
+			wantReadmeGenerated:            true,
+			wantComponentTestGenerated:     true,
+			wantConfigGenerated:            true,
+			wantEventsGenerated:            true,
+			wantLogsGenerated:              true,
+			wantMetricsSchemaYamlGenerated: true,
+		},
+		{
+			yml:                        "with_config.yaml",
 			wantStatusGenerated:        true,
 			wantReadmeGenerated:        true,
-			wantComponentTestGenerated: true,
-			wantConfigGenerated:        true,
-			wantEventsGenerated:        true,
 			wantLogsGenerated:          true,
+			wantComponentTestGenerated: true,
+			wantConfigSchemaGenerated:  true,
+		},
+		{
+			yml:        "with_invalid_config_ref.yaml",
+			wantRunErr: true,
 		},
 	}
 	for _, tt := range tests {
@@ -284,6 +305,11 @@ foo
 			if tt.wantOrderErr {
 				require.Error(t, err)
 				require.Contains(t, err.Error(), "metadata.yaml ordering check failed")
+				return
+			}
+			if tt.wantRunErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "failed to generate config files")
 				return
 			}
 			require.NoError(t, err)
@@ -409,8 +435,312 @@ foo
 			} else {
 				require.NotContains(t, string(contents), "teardownFunc")
 			}
+
+			if tt.wantConfigSchemaGenerated {
+				require.FileExists(t, filepath.Join(tmpdir, "config.schema.json"))
+			} else {
+				require.NoFileExists(t, filepath.Join(tmpdir, "config.schema.json"))
+			}
+
+			schemaYamlPath := filepath.Join(tmpdir, generatedPackageDir, "config.schema.yaml")
+			if tt.wantMetricsSchemaYamlGenerated {
+				require.FileExists(t, schemaYamlPath)
+				contents, err = os.ReadFile(filepath.Clean(schemaYamlPath))
+				require.NoError(t, err)
+				require.Contains(t, string(contents), "# Code generated by mdatagen. DO NOT EDIT.")
+				require.Contains(t, string(contents), "$defs:")
+				if tt.wantMetricsGenerated {
+					require.Contains(t, string(contents), "metrics_config:")
+					require.Contains(t, string(contents), "metrics_builder_config:")
+				}
+				if tt.wantEventsGenerated {
+					require.Contains(t, string(contents), "events_config:")
+					require.Contains(t, string(contents), "logs_builder_config:")
+				}
+				if tt.wantResourceAttributesGenerated {
+					require.Contains(t, string(contents), "resource_attributes_config:")
+				}
+			} else {
+				require.NoFileExists(t, schemaYamlPath)
+			}
 		})
 	}
+}
+
+func TestGenerateConfigFiles(t *testing.T) {
+	tests := []struct {
+		name    string
+		md      Metadata
+		wantErr bool
+		wantGen bool
+	}{
+		{
+			name: "nil config skips generation",
+			md: Metadata{
+				Type: "test",
+				Status: &Status{
+					Class: "receiver",
+				},
+				Config: nil,
+			},
+			wantGen: false,
+		},
+		{
+			name: "valid config generates schema file",
+			md: Metadata{
+				Type:        "test",
+				PackageName: "shortname",
+				Status: &Status{
+					Class: "receiver",
+				},
+				Config: &cfggen.ConfigMetadata{
+					Type: "object",
+				},
+			},
+			wantGen: true,
+		},
+		{
+			name: "invalid ref in config causes resolve error",
+			md: Metadata{
+				Type:        "test",
+				PackageName: "shortname",
+				Status: &Status{
+					Class: "receiver",
+				},
+				// A local ref without a definition name fails Validate() inside ResolveSchema
+				Config: &cfggen.ConfigMetadata{
+					Ref: "/config/configauth",
+				},
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+
+			tmpdir := filepath.Join(root, "shortname")
+			require.NoError(t, os.MkdirAll(tmpdir, 0o700))
+
+			require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module testmodule\n"), 0o600))
+			err := generateConfigFiles(tt.md, tmpdir, "testmodule")
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			if tt.wantGen {
+				require.FileExists(t, filepath.Join(tmpdir, "config.schema.json"))
+			} else {
+				require.NoFileExists(t, filepath.Join(tmpdir, "config.schema.json"))
+			}
+		})
+	}
+}
+
+func TestGenerateConfigGoStruct_RootPackageError(t *testing.T) {
+	// tmpdir has no go.mod in any ancestor, so helpers.RootPackage fails
+	md := Metadata{
+		Type:        "test",
+		PackageName: "shortname",
+		Status:      &Status{Class: "receiver"},
+		Config:      &cfggen.ConfigMetadata{Type: "object"},
+	}
+	err := generateConfigGoStruct(md, t.TempDir())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unable to determine root package")
+}
+
+func TestGenerateConfigGoStruct_ResolvedImports(t *testing.T) {
+	root := t.TempDir()
+	outputDir := filepath.Join(root, "shortname")
+	require.NoError(t, os.MkdirAll(outputDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module testmodule\n"), 0o600))
+
+	md := Metadata{
+		Type:        "test",
+		PackageName: "testmodule/shortname",
+		Status:      &Status{Class: "receiver"},
+		Config: &cfggen.ConfigMetadata{
+			Type: "object",
+			AllOf: []*cfggen.ConfigMetadata{
+				{
+					Type:         "object",
+					ResolvedFrom: "go.opentelemetry.io/collector/scraper/scraperhelper.ControllerConfig",
+					Properties: map[string]*cfggen.ConfigMetadata{
+						"timeout": {
+							Type:   "string",
+							GoType: "time.Duration",
+						},
+					},
+					Default: map[string]any{"timeout": "30s"},
+				},
+			},
+		},
+	}
+
+	err := generateConfigGoStruct(md, outputDir)
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(filepath.Join(outputDir, "generated_config.go")) // #nosec G304
+	require.NoError(t, err)
+
+	generated := string(content)
+	require.Contains(t, generated, `"go.opentelemetry.io/collector/component"`)
+	require.Contains(t, generated, `"go.opentelemetry.io/collector/scraper/scraperhelper"`)
+	require.Contains(t, generated, "func createDefaultConfig() component.Config")
+}
+
+func TestGenerateConfigGoStruct_NamedEmbeddedStruct(t *testing.T) {
+	root := t.TempDir()
+	outputDir := filepath.Join(root, "shortname")
+	require.NoError(t, os.MkdirAll(outputDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module testmodule\n"), 0o600))
+
+	md := Metadata{
+		Type:        "test",
+		PackageName: "testmodule/shortname",
+		Status:      &Status{Class: "receiver"},
+		Config: &cfggen.ConfigMetadata{
+			Type: "object",
+			AllOf: []*cfggen.ConfigMetadata{
+				{
+					Type:         "object",
+					ResolvedFrom: "go.opentelemetry.io/collector/scraper/scraperhelper.ControllerConfig",
+					EmbeddedName: "controller_config",
+					Default:      map[string]any{"timeout": "30s"},
+					Properties: map[string]*cfggen.ConfigMetadata{
+						"timeout": {
+							Type:   "string",
+							GoType: "time.Duration",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err := generateConfigGoStruct(md, outputDir)
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(filepath.Join(outputDir, "generated_config.go")) // #nosec G304
+	require.NoError(t, err)
+
+	generated := string(content)
+	require.Contains(t, generated, "ControllerConfig scraperhelper.ControllerConfig `mapstructure:\",squash\"`")
+	require.Contains(t, generated, `"time"`)
+	require.Contains(t, generated, "controllerConfig := scraperhelper.NewDefaultControllerConfig()")
+	require.Contains(t, generated, "controllerConfig.Timeout = 30 * time.Second")
+	require.Contains(t, generated, "ControllerConfig: controllerConfig,")
+}
+
+func TestGenerateConfigGoStruct_PropertyDefaultsAndImports(t *testing.T) {
+	root := t.TempDir()
+	outputDir := filepath.Join(root, "shortname")
+	require.NoError(t, os.MkdirAll(outputDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module testmodule\n"), 0o600))
+
+	md := Metadata{
+		Type:        "test",
+		PackageName: "testmodule/shortname",
+		Status:      &Status{Class: "receiver"},
+		Config: &cfggen.ConfigMetadata{
+			Type: "object",
+			Properties: map[string]*cfggen.ConfigMetadata{
+				"timeout": {
+					Type:    "string",
+					GoType:  "time.Duration",
+					Default: "30s",
+				},
+			},
+		},
+	}
+
+	err := generateConfigGoStruct(md, outputDir)
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(filepath.Join(outputDir, "generated_config.go")) // #nosec G304
+	require.NoError(t, err)
+
+	generated := string(content)
+	require.Contains(t, generated, `"time"`)
+	require.Contains(t, generated, "func createDefaultConfig() component.Config")
+	require.Contains(t, generated, "Timeout: 30 * time.Second,")
+}
+
+func TestGenerateConfigGoStruct_InternalResolvedRefGeneratesLocalType(t *testing.T) {
+	root := t.TempDir()
+	outputDir := filepath.Join(root, "shortname")
+	require.NoError(t, os.MkdirAll(outputDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module testmodule\n"), 0o600))
+
+	md := Metadata{
+		Type:        "test",
+		PackageName: "testmodule/shortname",
+		Status:      &Status{Class: "receiver"},
+		Config: &cfggen.ConfigMetadata{
+			Type: "object",
+			Properties: map[string]*cfggen.ConfigMetadata{
+				"config": {
+					Type:         "object",
+					ResolvedFrom: "plain_config",
+					Default:      map[string]any{"timeout": "30s"},
+					Properties: map[string]*cfggen.ConfigMetadata{
+						"timeout": {
+							Type:    "string",
+							GoType:  "time.Duration",
+							Default: "30s",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err := generateConfigGoStruct(md, outputDir)
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(filepath.Join(outputDir, "generated_config.go")) // #nosec G304
+	require.NoError(t, err)
+
+	generated := string(content)
+	require.Contains(t, generated, `"time"`)
+	require.Contains(t, generated, "type PlainConfig struct")
+	require.Contains(t, generated, "func NewDefaultPlainConfig() PlainConfig")
+	require.Contains(t, generated, "Timeout: 30 * time.Second,")
+	require.Contains(t, generated, "Config PlainConfig `mapstructure:\"config\"`")
+	require.Contains(t, generated, "config := NewDefaultPlainConfig()")
+	require.Contains(t, generated, "config.Timeout = 30 * time.Second")
+	require.Contains(t, generated, "Config: config,")
+}
+
+func TestGenerateConfigFiles_GoStructError(t *testing.T) {
+	// generateConfigGoStruct fails because tmpdir has no go.mod in any ancestor
+	md := Metadata{
+		Type:        "test",
+		PackageName: "shortname",
+		Status:      &Status{Class: "receiver"},
+		Config:      &cfggen.ConfigMetadata{Type: "object"},
+	}
+	err := generateConfigFiles(md, t.TempDir(), "testmodule")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to generate config Go struct")
+}
+
+func TestGenerateConfigFiles_WriteError(t *testing.T) {
+	md := Metadata{
+		Type:        "test",
+		PackageName: "shortname",
+		Status: &Status{
+			Class: "receiver",
+		},
+		Config: &cfggen.ConfigMetadata{
+			Type: "object",
+		},
+	}
+	err := generateConfigFiles(md, "/nonexistent/path/that/does/not/exist", "testmodule")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to write config schema")
 }
 
 func TestRun(t *testing.T) {
@@ -683,7 +1013,7 @@ Some info about a component
 			readmeFile := filepath.Join(tmpdir, "README.md")
 			require.NoError(t, os.WriteFile(readmeFile, []byte(tt.markdown), 0o600))
 
-			err := inlineReplace("templates/readme.md.tmpl", readmeFile, md, statusStart, statusEnd, "metadata")
+			err := inlineReplace("templates/readme.md.tmpl", readmeFile, md, statusStart, statusEnd, "metadata", "go.opentelemetry.io/collector")
 			require.NoError(t, err)
 
 			require.FileExists(t, filepath.Join(tmpdir, "README.md"))
@@ -721,6 +1051,8 @@ func TestGenerateStatusMetadata(t *testing.T) {
 			},
 			expected: `// Code generated by mdatagen. DO NOT EDIT.
 
+// Package metadata contains the autogenerated telemetry and
+// build information for the receiver/foo component.
 package metadata
 
 import (
@@ -751,6 +1083,8 @@ const (
 			},
 			expected: `// Code generated by mdatagen. DO NOT EDIT.
 
+// Package metadata contains the autogenerated telemetry and
+// build information for the receiver/foo component.
 package metadata
 
 import (
@@ -767,13 +1101,47 @@ const (
 )
 `,
 		},
+		{
+			name: "foo component with deprecated type",
+			md: Metadata{
+				Type:           "foo",
+				DeprecatedType: "old_foo",
+				Status: &Status{
+					Stability: map[component.StabilityLevel][]string{
+						component.StabilityLevelBeta: {"metrics"},
+					},
+					Distributions: []string{"contrib"},
+					Class:         "receiver",
+				},
+			},
+			expected: `// Code generated by mdatagen. DO NOT EDIT.
+
+// Package metadata contains the autogenerated telemetry and
+// build information for the receiver/foo component.
+package metadata
+
+import (
+	"go.opentelemetry.io/collector/component"
+)
+
+var (
+	Type           = component.MustNewType("foo")
+	DeprecatedType = component.MustNewType("old_foo")
+	ScopeName      = ""
+)
+
+const (
+	MetricsStability = component.StabilityLevelBeta
+)
+`,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpdir := t.TempDir()
 			err := generateFile("templates/status.go.tmpl",
-				filepath.Join(tmpdir, "generated_status.go"), tt.md, "metadata")
+				filepath.Join(tmpdir, "generated_status.go"), tt.md, "metadata", "go.opentelemetry.io/collector")
 			require.NoError(t, err)
 			actual, err := os.ReadFile(filepath.Clean(filepath.Join(tmpdir, "generated_status.go")))
 			require.NoError(t, err)
@@ -859,11 +1227,144 @@ func Tracer(settings component.TelemetrySettings) trace.Tracer {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpdir := t.TempDir()
 			err := generateFile("templates/telemetry.go.tmpl",
-				filepath.Join(tmpdir, "generated_telemetry.go"), tt.md, "metadata")
+				filepath.Join(tmpdir, "generated_telemetry.go"), tt.md, "metadata", "go.opentelemetry.io/collector")
 			require.NoError(t, err)
 			actual, err := os.ReadFile(filepath.Clean(filepath.Join(tmpdir, "generated_telemetry.go")))
 			require.NoError(t, err)
 			require.Equal(t, tt.expected, string(actual))
 		})
 	}
+}
+
+func TestGenerateConfigGoStruct_GeneratesTestFile(t *testing.T) {
+	root := t.TempDir()
+	outputDir := filepath.Join(root, "shortname")
+	require.NoError(t, os.MkdirAll(outputDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module testmodule\n"), 0o600))
+
+	md := Metadata{
+		Type:        "test",
+		PackageName: "testmodule/shortname",
+		Status:      &Status{Class: "receiver"},
+		Config:      &cfggen.ConfigMetadata{Type: "object"},
+	}
+
+	require.NoError(t, generateConfigGoStruct(md, outputDir))
+
+	require.FileExists(t, filepath.Join(outputDir, "generated_config.go"))
+	require.FileExists(t, filepath.Join(outputDir, "generated_config_test.go"))
+
+	content, err := os.ReadFile(filepath.Join(outputDir, "generated_config_test.go")) // #nosec G304
+	require.NoError(t, err)
+	require.Contains(t, string(content), "func TestCreateDefaultConfig(")
+}
+
+func TestGenerateConfigGoStruct_TestFileContainsValidateTestWhenValidatorsPresent(t *testing.T) {
+	root := t.TempDir()
+	outputDir := filepath.Join(root, "shortname")
+	require.NoError(t, os.MkdirAll(outputDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module testmodule\n"), 0o600))
+
+	md := Metadata{
+		Type:        "test",
+		PackageName: "testmodule/shortname",
+		Status:      &Status{Class: "receiver"},
+		Config: &cfggen.ConfigMetadata{
+			Type: "object",
+			Properties: map[string]*cfggen.ConfigMetadata{
+				"name": {
+					Type:      "string",
+					MinLength: func() *int { v := 1; return &v }(),
+				},
+			},
+		},
+	}
+
+	require.NoError(t, generateConfigGoStruct(md, outputDir))
+
+	content, err := os.ReadFile(filepath.Join(outputDir, "generated_config_test.go")) // #nosec G304
+	require.NoError(t, err)
+	require.Contains(t, string(content), "func TestCreateDefaultConfig(")
+	require.Contains(t, string(content), "func TestConfigValidate_DefaultValid(")
+}
+
+func TestGenerateConfigGoStruct_TestFileNoValidateTestWhenNoValidators(t *testing.T) {
+	root := t.TempDir()
+	outputDir := filepath.Join(root, "shortname")
+	require.NoError(t, os.MkdirAll(outputDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module testmodule\n"), 0o600))
+
+	md := Metadata{
+		Type:        "test",
+		PackageName: "testmodule/shortname",
+		Status:      &Status{Class: "receiver"},
+		Config: &cfggen.ConfigMetadata{
+			Type: "object",
+			Properties: map[string]*cfggen.ConfigMetadata{
+				"timeout": {
+					Type:   "string",
+					GoType: "time.Duration",
+				},
+			},
+		},
+	}
+
+	require.NoError(t, generateConfigGoStruct(md, outputDir))
+
+	content, err := os.ReadFile(filepath.Join(outputDir, "generated_config_test.go")) // #nosec G304
+	require.NoError(t, err)
+	require.Contains(t, string(content), "func TestCreateDefaultConfig(")
+	require.NotContains(t, string(content), "func TestConfigValidate_DefaultValid(")
+}
+
+func TestGenerateConfigGoStruct_BothFileErrorsAccumulated(t *testing.T) {
+	root := t.TempDir()
+	// outputDir itself does not exist — both generateFileWithFns calls will fail
+	outputDir := filepath.Join(root, "nonexistent", "shortname")
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module testmodule\n"), 0o600))
+
+	md := Metadata{
+		Type:        "test",
+		PackageName: "testmodule/nonexistent/shortname",
+		Status:      &Status{Class: "receiver"},
+		Config:      &cfggen.ConfigMetadata{Type: "object"},
+	}
+
+	err := generateConfigGoStruct(md, outputDir)
+	require.Error(t, err)
+	// Both generated_config.go and generated_config_test.go writes fail; both errors must be present.
+	require.Contains(t, err.Error(), "generated_config.go")
+	require.Contains(t, err.Error(), "generated_config_test.go")
+}
+
+func TestGenerateConfigSchema_LocalizesSameRootRefs(t *testing.T) {
+	enabled := true
+	md := Metadata{
+		Type: "foo",
+		ResourceAttributes: map[AttributeName]Attribute{
+			"resource.attr": {
+				Description: "resource attr",
+				EnabledPtr:  &enabled,
+				FullName:    "resource.attr",
+			},
+		},
+		Events: map[EventName]Event{
+			"default.event": {
+				Signal: Signal{
+					Enabled:     true,
+					Description: "event description",
+				},
+			},
+		},
+	}
+
+	tmpdir := t.TempDir()
+	outputFile := filepath.Join(tmpdir, "config.schema.yaml")
+	err := generateFile("templates/config.schema.yaml.tmpl", outputFile, md, "metadata", "go.opentelemetry.io/collector")
+	require.NoError(t, err)
+
+	actual, err := os.ReadFile(filepath.Clean(outputFile))
+	require.NoError(t, err)
+	require.Contains(t, string(actual), "$ref: /filter.config")
+	require.NotContains(t, string(actual), "$ref: go.opentelemetry.io/collector/filter.config")
 }

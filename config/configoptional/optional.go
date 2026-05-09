@@ -3,15 +3,17 @@
 
 package configoptional // import "go.opentelemetry.io/collector/config/configoptional"
 
+//go:generate mdatagen metadata.yaml
+
 import (
 	"errors"
 	"fmt"
 	"reflect"
 	"strings"
 
+	"go.opentelemetry.io/collector/config/configoptional/internal/metadata"
 	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/confmap/xconfmap"
-	"go.opentelemetry.io/collector/featuregate"
 )
 
 type flavor int
@@ -167,17 +169,6 @@ func (o *Optional[T]) GetOrInsertDefault() *T {
 
 var _ confmap.Unmarshaler = (*Optional[any])(nil)
 
-var (
-	addEnabledFieldFeatureGateID = "configoptional.AddEnabledField"
-	addEnabledFieldFeatureGate   = featuregate.GlobalRegistry().MustRegister(
-		addEnabledFieldFeatureGateID,
-		featuregate.StageBeta,
-		featuregate.WithRegisterFromVersion("v0.138.0"),
-		featuregate.WithRegisterDescription("Allows optional fields to be toggled via an 'enabled' field."),
-		featuregate.WithRegisterReferenceURL("https://github.com/open-telemetry/opentelemetry-collector/issues/14021"),
-	)
-)
-
 // Unmarshal the configuration into the Optional value.
 //
 // The behavior of this method depends on the state of the Optional:
@@ -205,7 +196,7 @@ func (o *Optional[T]) Unmarshal(conf *confmap.Conf) error {
 	}
 
 	isEnabled := true
-	if addEnabledFieldFeatureGate.IsEnabled() && conf.IsSet("enabled") {
+	if metadata.ConfigoptionalAddEnabledFieldFeatureGate.IsEnabled() && conf.IsSet("enabled") {
 		enabled := conf.Get("enabled")
 		conf.Delete("enabled")
 		var ok bool
@@ -255,13 +246,13 @@ func (o Optional[T]) Marshal(conf *confmap.Conf) error {
 	return nil
 }
 
-var _ xconfmap.Validator = (*Optional[any])(nil)
+var _ confmap.Validator = (*Optional[any])(nil)
 
-// Validate implements [xconfmap.Validator]. This is required because the
-// private fields in [xconfmap.Validator] can't be seen by the reflection used
-// by [xconfmap.Validate], and therefore we have to continue the validation
+// Validate implements [confmap.Validator]. This is required because the
+// private fields in [confmap.Validator] can't be seen by the reflection used
+// by [confmap.Validate], and therefore we have to continue the validation
 // chain manually. This method isn't meant to be called directly, and should
-// generally only be called by [xconfmap.Validate].
+// generally only be called by [confmap.Validate].
 func (o *Optional[T]) Validate() error {
 	// When the flavor is None, the user has not passed this value,
 	// and therefore we should not validate it. The parent struct holding
@@ -275,5 +266,5 @@ func (o *Optional[T]) Validate() error {
 	}
 
 	// For the some flavor, validate the actual value.
-	return xconfmap.Validate(o.value)
+	return confmap.Validate(o.value)
 }
