@@ -63,6 +63,154 @@ func TestResolver_ResolveSchema_InternalReference(t *testing.T) {
 	require.Equal(t, "Target type description", result.Properties["config"].Description)
 }
 
+func TestResolver_ResolveSchema_InternalReferencePreservesInlineValidationOverrides(t *testing.T) {
+	resolver := &Resolver{
+		pkgID:  "go.opentelemetry.io/collector/test/component",
+		class:  "receiver",
+		name:   "test",
+		loader: NewLoader(""),
+	}
+
+	minimum, aliasMaximum, fieldMaximum := 1.0, 65535.0, 10000.0
+	src := &ConfigMetadata{
+		Type: "object",
+		Properties: map[string]*ConfigMetadata{
+			"port": {
+				Ref:     "port_number",
+				Maximum: &fieldMaximum,
+			},
+		},
+		Defs: map[string]*ConfigMetadata{
+			"port_number": {
+				Type:    "integer",
+				GoType:  "int32",
+				Minimum: &minimum,
+				Maximum: &aliasMaximum,
+			},
+		},
+	}
+
+	result, err := resolver.ResolveSchema(src)
+	require.NoError(t, err)
+
+	port := result.Properties["port"]
+	require.NotNil(t, port)
+	require.Equal(t, "integer", port.Type)
+	require.Equal(t, "port_number", port.ResolvedFrom)
+	require.Empty(t, port.GoType)
+	require.NotNil(t, port.Minimum)
+	require.InEpsilon(t, minimum, *port.Minimum, 1e-9)
+	require.NotNil(t, port.Maximum)
+	require.InEpsilon(t, fieldMaximum, *port.Maximum, 1e-9)
+
+	def := result.Defs["port_number"]
+	require.NotNil(t, def)
+	require.Equal(t, "int32", def.GoType)
+	require.NotNil(t, def.Maximum)
+	require.InEpsilon(t, aliasMaximum, *def.Maximum, 1e-9)
+}
+
+func TestResolver_ResolveSchema_DefsOnlyPreservesDefs(t *testing.T) {
+	resolver := &Resolver{
+		pkgID:  "go.opentelemetry.io/collector/test/pkg",
+		class:  "pkg",
+		name:   "testpkg",
+		loader: NewLoader(""),
+	}
+
+	src := &ConfigMetadata{
+		Defs: map[string]*ConfigMetadata{
+			"sample_config": {
+				Type: "object",
+				Properties: map[string]*ConfigMetadata{
+					"endpoint": {Type: "string"},
+				},
+			},
+		},
+	}
+
+	result, err := resolver.ResolveSchema(src)
+	require.NoError(t, err)
+	require.Empty(t, result.Type)
+	require.Empty(t, result.Properties)
+	require.Contains(t, result.Defs, "sample_config")
+	require.Equal(t, "object", result.Defs["sample_config"].Type)
+	require.Contains(t, result.Defs["sample_config"].Properties, "endpoint")
+}
+
+func TestResolver_ResolveSchema_PreservesInlineDefsWithProperties(t *testing.T) {
+	resolver := &Resolver{
+		pkgID:  "go.opentelemetry.io/collector/test/component",
+		class:  "receiver",
+		name:   "test",
+		loader: NewLoader(""),
+	}
+
+	src := &ConfigMetadata{
+		Type: "object",
+		Properties: map[string]*ConfigMetadata{
+			"endpoint": {Type: "string"},
+		},
+		Defs: map[string]*ConfigMetadata{
+			"sample_config": {
+				Type: "object",
+				Properties: map[string]*ConfigMetadata{
+					"host_name": {Type: "string"},
+				},
+			},
+		},
+	}
+
+	result, err := resolver.ResolveSchema(src)
+	require.NoError(t, err)
+	require.Contains(t, result.Properties, "endpoint")
+	require.Contains(t, result.Defs, "sample_config")
+	require.Equal(t, "object", result.Defs["sample_config"].Type)
+	require.Contains(t, result.Defs["sample_config"].Properties, "host_name")
+}
+
+func TestResolver_ResolveSchema_DropsInternalOnlyDefs(t *testing.T) {
+	resolver := &Resolver{
+		pkgID:  "go.opentelemetry.io/collector/test/component",
+		class:  "receiver",
+		name:   "test",
+		loader: NewLoader(""),
+	}
+
+	src := &ConfigMetadata{
+		Type: "object",
+		Properties: map[string]*ConfigMetadata{
+			"endpoint": {Type: "string"},
+		},
+		Defs: map[string]*ConfigMetadata{
+			"metrics_builder_config": {
+				Type:         "object",
+				InternalOnly: true,
+				Properties: map[string]*ConfigMetadata{
+					"metrics": {Type: "object"},
+				},
+			},
+			"sample_config": {
+				Type: "object",
+				Properties: map[string]*ConfigMetadata{
+					"host_name": {Type: "string"},
+				},
+			},
+			"exported_metrics_config": {
+				Ref: "metrics_builder_config",
+			},
+		},
+	}
+
+	result, err := resolver.ResolveSchema(src)
+	require.NoError(t, err)
+	require.Contains(t, result.Properties, "endpoint")
+	require.NotContains(t, result.Defs, "metrics_builder_config")
+	require.Contains(t, result.Defs, "sample_config")
+	require.Contains(t, result.Defs, "exported_metrics_config")
+	require.Contains(t, result.Defs["exported_metrics_config"].Properties, "metrics")
+}
+
 func TestResolver_ResolveSchema_UnknownInternalReference(t *testing.T) {
 	resolver := &Resolver{
 		pkgID:  "go.opentelemetry.io/collector/test/component",
@@ -193,6 +341,142 @@ func TestResolver_ResolveSchema_AliasChain_PreservesCustomExtensions(t *testing.
 	require.Equal(t, "overridden description", cfg.Description)
 	require.Equal(t, map[string]any{"level": 5}, cfg.Default)
 	require.NotNil(t, cfg.Properties["level"])
+}
+
+func TestResolver_ResolveSchema_InternalAliasChain(t *testing.T) {
+	resolver := &Resolver{
+		pkgID:  "go.opentelemetry.io/collector/test/component",
+		class:  "receiver",
+		name:   "test",
+		loader: &mockLoader{schemas: map[string]*ConfigMetadata{}},
+	}
+
+	src := &ConfigMetadata{
+		Type: "object",
+		Defs: map[string]*ConfigMetadata{
+			"alias": {Ref: "base"},
+			"base": {
+				Type:        "object",
+				Description: "Base configuration",
+				Properties: map[string]*ConfigMetadata{
+					"endpoint": {Type: "string"},
+				},
+			},
+		},
+		Properties: map[string]*ConfigMetadata{
+			"cfg": {
+				Ref: "alias",
+			},
+		},
+	}
+
+	result, err := resolver.ResolveSchema(src)
+	require.NoError(t, err)
+
+	cfg := result.Properties["cfg"]
+	require.NotNil(t, cfg)
+	require.Equal(t, "base", cfg.ResolvedFrom)
+	require.Equal(t, "object", cfg.Type)
+	require.Equal(t, "Base configuration", cfg.Description)
+	require.Contains(t, cfg.Properties, "endpoint")
+}
+
+func TestResolver_ResolveSchema_DefsOnlyLocalAliasWithSameDefName(t *testing.T) {
+	controllerSchema := &ConfigMetadata{
+		Type: "object",
+		Defs: map[string]*ConfigMetadata{
+			"controller_config": {
+				Type:        "object",
+				Description: "Controller configuration",
+				Properties: map[string]*ConfigMetadata{
+					"collection_interval": {Type: "string"},
+				},
+			},
+		},
+	}
+
+	resolver := &Resolver{
+		pkgID: "go.opentelemetry.io/collector/scraper/scraperhelper",
+		class: "pkg",
+		name:  "scraperhelper",
+		loader: &mockLoader{schemas: map[string]*ConfigMetadata{
+			"./internal/controller.controller_config": controllerSchema,
+		}},
+	}
+
+	src := &ConfigMetadata{
+		Defs: map[string]*ConfigMetadata{
+			"controller_config": {
+				Ref: "./internal/controller.controller_config",
+			},
+		},
+	}
+
+	result, err := resolver.ResolveSchema(src)
+	require.NoError(t, err)
+
+	controller := result.Defs["controller_config"]
+	require.NotNil(t, controller)
+	require.Equal(t, "./internal/controller.controller_config", controller.ResolvedFrom)
+	require.Equal(t, "object", controller.Type)
+	require.Equal(t, "Controller configuration", controller.Description)
+	require.Contains(t, controller.Properties, "collection_interval")
+}
+
+func TestResolver_ResolveSchema_ExternalRefDoesNotUseRootDefWithSameName(t *testing.T) {
+	externalSchema := &ConfigMetadata{
+		Type: "object",
+		Defs: map[string]*ConfigMetadata{
+			"shared_config": {
+				Type:        "object",
+				Description: "External shared config",
+				Properties: map[string]*ConfigMetadata{
+					"external": {Type: "string"},
+				},
+			},
+		},
+	}
+
+	ml := &mockLoader{
+		schemas: map[string]*ConfigMetadata{
+			"go.opentelemetry.io/collector/config/shared.shared_config": externalSchema,
+		},
+	}
+
+	resolver := &Resolver{
+		pkgID:  "go.opentelemetry.io/collector/test/component",
+		class:  "receiver",
+		name:   "test",
+		loader: ml,
+	}
+
+	src := &ConfigMetadata{
+		Type: "object",
+		Defs: map[string]*ConfigMetadata{
+			"shared_config": {
+				Type:        "object",
+				Description: "Local shared config",
+				Properties: map[string]*ConfigMetadata{
+					"local": {Type: "string"},
+				},
+			},
+		},
+		Properties: map[string]*ConfigMetadata{
+			"cfg": {
+				Ref: "go.opentelemetry.io/collector/config/shared.shared_config",
+			},
+		},
+	}
+
+	result, err := resolver.ResolveSchema(src)
+	require.NoError(t, err)
+
+	cfg := result.Properties["cfg"]
+	require.NotNil(t, cfg)
+	require.Equal(t, "go.opentelemetry.io/collector/config/shared.shared_config", cfg.ResolvedFrom)
+	require.Equal(t, "External shared config", cfg.Description)
+	require.Contains(t, cfg.Properties, "external")
+	require.NotContains(t, cfg.Properties, "local")
 }
 
 func TestResolver_ResolveSchema_NestedStructures(t *testing.T) {
@@ -1126,6 +1410,44 @@ func TestResolver_ResolveSchema_LocalRef(t *testing.T) {
 	require.Equal(t, "Local target", result.Properties["local"].Description)
 }
 
+func TestResolver_ResolveSchema_LocalRefUsesRootDef(t *testing.T) {
+	resolver := &Resolver{
+		pkgID:  "go.opentelemetry.io/collector/test/component",
+		class:  "receiver",
+		name:   "test",
+		loader: &mockLoader{schemas: map[string]*ConfigMetadata{}},
+	}
+
+	src := &ConfigMetadata{
+		Type: "object",
+		Defs: map[string]*ConfigMetadata{
+			"resource_attributes_config": {
+				Type:        "object",
+				Description: "Injected resource attributes config",
+				Properties: map[string]*ConfigMetadata{
+					"service.name": {
+						Type: "string",
+					},
+				},
+			},
+		},
+		Properties: map[string]*ConfigMetadata{
+			"resource_attributes": {
+				Ref: "/config/metadata.resource_attributes_config",
+			},
+		},
+	}
+
+	result, err := resolver.ResolveSchema(src)
+	require.NoError(t, err)
+
+	resourceAttributes := result.Properties["resource_attributes"]
+	require.Equal(t, "object", resourceAttributes.Type)
+	require.Equal(t, "Injected resource attributes config", resourceAttributes.Description)
+	require.Contains(t, resourceAttributes.Properties, "service.name")
+	require.Equal(t, "string", resourceAttributes.Properties["service.name"].Type)
+}
+
 func TestResolver_ResolveSchema_MapValueError(t *testing.T) {
 	resolver := &Resolver{
 		pkgID:  "go.opentelemetry.io/collector/test/component",
@@ -1366,6 +1688,32 @@ func TestResolver_ResolveSchema_RefWithoutCustomExtensions(t *testing.T) {
 	require.Equal(t, "object", base.Type)
 	require.Equal(t, "Base configuration from the target schema", base.Description)
 	require.Equal(t, "BaseConfig", base.GoType)
+}
+
+func TestResolver_ResolveSchema_DecoratesPropNames(t *testing.T) {
+	resolver := &Resolver{
+		pkgID:  "go.opentelemetry.io/collector/test/component",
+		class:  "receiver",
+		name:   "test",
+		loader: NewLoader(""),
+	}
+
+	src := &ConfigMetadata{
+		Type: "object",
+		Properties: map[string]*ConfigMetadata{
+			"endpoint": {Type: "string"},
+			"storage": {
+				Type:   "string",
+				GoType: "go.opentelemetry.io/collector/component.ID",
+			},
+		},
+	}
+
+	result, err := resolver.ResolveSchema(src)
+	require.NoError(t, err)
+
+	require.Equal(t, "endpoint", result.Properties["endpoint"].GoStruct.FieldName)
+	require.Equal(t, "storage", result.Properties["storage"].GoStruct.FieldName)
 }
 
 func TestResolver_ResolveSchema_PreservesIntAndFloatPointers(t *testing.T) {

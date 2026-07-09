@@ -4,6 +4,7 @@
 package schemagen
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -31,6 +32,46 @@ func TestConfigMetadata_ToJSON(t *testing.T) {
 	assert.Contains(t, string(data), `"$schema"`)
 	assert.Contains(t, string(data), `"endpoint"`)
 	assert.Contains(t, string(data), `"The endpoint"`)
+}
+
+func TestConfigMetadata_MarshalJSON_NoSpecialFieldsUsesStructLayout(t *testing.T) {
+	t.Parallel()
+
+	metadata := &ConfigMetadata{
+		ID:          "sample",
+		Schema:      schemaVersion,
+		Title:       "Example",
+		Description: "Example schema",
+		Type:        "object",
+		Properties: map[string]*ConfigMetadata{
+			"value": {Type: "string"},
+		},
+		Required: []string{"value"},
+	}
+
+	type alias ConfigMetadata
+
+	expected, err := json.Marshal((*alias)(metadata))
+	require.NoError(t, err)
+
+	actual, err := json.Marshal(metadata)
+	require.NoError(t, err)
+
+	require.JSONEq(t, string(expected), string(actual))
+	require.Equal(t, string(expected), string(actual))
+}
+
+func TestConfigMetadata_MarshalJSON_SpecialFieldsMarshalError(t *testing.T) {
+	t.Parallel()
+
+	metadata := &ConfigMetadata{
+		Type:                        "object",
+		AdditionalPropertiesAllowed: boolPtr(false),
+		Default:                     func() {},
+	}
+
+	_, err := json.Marshal(metadata)
+	require.Error(t, err)
 }
 
 func TestConfigMetadata_UnmarshalYAMLDefaultValue(t *testing.T) {
@@ -180,6 +221,19 @@ func TestConfigMetadata_Validate_Valid(t *testing.T) {
 					"endpoint": {Type: "string"},
 					"timeout":  {Type: "string", GoType: "time.Duration"},
 					"port":     {Type: "integer"},
+				},
+			},
+		},
+		{
+			name: "valid with defs only",
+			md: &ConfigMetadata{
+				Defs: map[string]*ConfigMetadata{
+					"controller_config": {
+						Type: "object",
+						Properties: map[string]*ConfigMetadata{
+							"timeout": {Type: "string"},
+						},
+					},
 				},
 			},
 		},
@@ -493,4 +547,54 @@ func TestGoStructConfig_UnmarshalError(t *testing.T) {
 
 	var g GoStructConfig
 	require.Error(t, g.Unmarshal(parser))
+}
+
+func TestConfigMetadata_Validate_EnumOnComplexType(t *testing.T) {
+	tests := []struct {
+		name    string
+		md      *ConfigMetadata
+		wantErr string
+	}{
+		{
+			name: "enum on object",
+			md: &ConfigMetadata{
+				Type: "object",
+				Properties: map[string]*ConfigMetadata{
+					"nested": {Type: "object", Enum: []any{"a"}},
+				},
+			},
+			wantErr: `property "nested": enum is not supported for type "object"`,
+		},
+		{
+			name: "enum on array",
+			md: &ConfigMetadata{
+				Type: "object",
+				Properties: map[string]*ConfigMetadata{
+					"items": {Type: "array", Enum: []any{"a"}},
+				},
+			},
+			wantErr: `property "items": enum is not supported for type "array"`,
+		},
+		{
+			name: "enum on string is valid",
+			md: &ConfigMetadata{
+				Type: "object",
+				Properties: map[string]*ConfigMetadata{
+					"level": {Type: "string", Enum: []any{"a", "b"}},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.md.Validate()
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }

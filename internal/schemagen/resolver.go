@@ -51,6 +51,10 @@ func (r *Resolver) ResolveSchema(src *ConfigMetadata) (*ConfigMetadata, error) {
 	target.ID = r.pkgID
 	target.Title = fmt.Sprintf("%s/%s", r.class, r.name)
 
+	if len(src.Properties) > 0 {
+		target.Type = "object"
+	}
+
 	return target, nil
 }
 
@@ -63,6 +67,14 @@ func (r *Resolver) resolveSchema(root, current, target *ConfigMetadata, origin *
 		customDescription := current.Description
 		customDefault := current.Default
 		customEnum := current.Enum
+		customInternalOnly := current.InternalOnly
+		customMaxLength := current.MaxLength
+		customMinLength := current.MinLength
+		customPattern := current.Pattern
+		customMaximum := current.Maximum
+		customExclusiveMaximum := current.ExclusiveMaximum
+		customMinimum := current.Minimum
+		customExclusiveMinimum := current.ExclusiveMinimum
 
 		finalRef := current.Ref
 		resolved, err := r.resolveRef(root, current, origin)
@@ -91,10 +103,16 @@ func (r *Resolver) resolveSchema(root, current, target *ConfigMetadata, origin *
 		newCurrent.ResolvedFrom = finalRef
 		newCurrent.GoStruct = current.GoStruct
 		newCurrent.Embed = current.Embed
+		newCurrent.InternalOnly = customInternalOnly
 
 		// Restore custom extensions if they were explicitly set on the reference
 		if customGoType != "" {
 			newCurrent.GoType = customGoType
+		} else if isPrimitiveType(newCurrent.Type) {
+			// A primitive definition may use x-customType to choose the underlying
+			// Go type for its named declaration. Do not let that underlying type
+			// replace the named type at fields that reference the definition.
+			newCurrent.GoType = ""
 		}
 		if customIsPointer {
 			newCurrent.IsPointer = customIsPointer
@@ -110,6 +128,27 @@ func (r *Resolver) resolveSchema(root, current, target *ConfigMetadata, origin *
 		}
 		if len(customEnum) > 0 {
 			newCurrent.Enum = customEnum
+		}
+		if customMaxLength != nil {
+			newCurrent.MaxLength = customMaxLength
+		}
+		if customMinLength != nil {
+			newCurrent.MinLength = customMinLength
+		}
+		if customPattern != "" {
+			newCurrent.Pattern = customPattern
+		}
+		if customMaximum != nil {
+			newCurrent.Maximum = customMaximum
+		}
+		if customExclusiveMaximum != nil {
+			newCurrent.ExclusiveMaximum = customExclusiveMaximum
+		}
+		if customMinimum != nil {
+			newCurrent.Minimum = customMinimum
+		}
+		if customExclusiveMinimum != nil {
+			newCurrent.ExclusiveMinimum = customExclusiveMinimum
 		}
 
 		current = &newCurrent
@@ -181,9 +220,19 @@ func (r *Resolver) resolveSchema(root, current, target *ConfigMetadata, origin *
 	}
 	handleEmbeddedStructs(target)
 	enhanceTimeTypes(target)
-	cleanupDefs(target)
+	cleanupInternalDefs(target)
+	resolveGoNames(target)
 
 	return nil
+}
+
+func isPrimitiveType(typ string) bool {
+	switch typ {
+	case "string", "integer", "number", "boolean":
+		return true
+	default:
+		return false
+	}
 }
 
 // resolveRef resolves a JSON Schema $ref, handling both internal and external references.
@@ -196,12 +245,8 @@ func (r *Resolver) resolveRef(root, current *ConfigMetadata, origin *Ref) (*Conf
 		return nil, fmt.Errorf("invalid reference format %q: %w", current.Ref, err)
 	}
 
-	if ref.IsInternal() {
-		if root.Defs != nil {
-			if val, ok := root.Defs[ref.DefName()]; ok {
-				return val, nil
-			}
-		}
+	if def, ok := lookupRootDef(root, current, ref); ok {
+		return def, nil
 	}
 
 	if ref.IsLocal() {
@@ -217,6 +262,17 @@ func (r *Resolver) resolveRef(root, current *ConfigMetadata, origin *Ref) (*Conf
 	current.GoType = current.Ref
 	current.Comment = "Uses `any` type."
 	return current, nil
+}
+
+func lookupRootDef(root, current *ConfigMetadata, ref *Ref) (*ConfigMetadata, bool) {
+	if root.Defs == nil || (!ref.IsInternal() && !ref.IsLocal()) {
+		return nil, false
+	}
+	def, ok := root.Defs[ref.DefName()]
+	if !ok || def == current {
+		return nil, false
+	}
+	return def, ok
 }
 
 // loadExternalRef uses SchemaLoader to load external references
@@ -240,6 +296,14 @@ func (r *Resolver) loadExternalRef(ref *Ref) (*ConfigMetadata, error) {
 	}
 
 	return nil, fmt.Errorf("type %q not found in loaded schema for reference %s", ref.DefName(), ref)
+}
+
+func resolveGoNames(md *ConfigMetadata) {
+	for name, prop := range md.Properties {
+		if prop.GoStruct.FieldName == "" {
+			prop.GoStruct.FieldName = name
+		}
+	}
 }
 
 func handleEmbeddedStructs(md *ConfigMetadata) {
@@ -277,17 +341,13 @@ func enhanceTimeTypes(md *ConfigMetadata) {
 	}
 }
 
-func cleanupDefs(md *ConfigMetadata) {
-	if md.Defs == nil {
-		// nothing to do here
-		return
-	}
-	defs := make(map[string]*ConfigMetadata)
+func cleanupInternalDefs(md *ConfigMetadata) {
 	for name, def := range md.Defs {
-		// if is an alias
-		if def.ResolvedFrom != "" {
-			defs[name] = def
+		if def != nil && def.InternalOnly {
+			delete(md.Defs, name)
 		}
 	}
-	md.Defs = defs
+	if len(md.Defs) == 0 {
+		md.Defs = nil
+	}
 }

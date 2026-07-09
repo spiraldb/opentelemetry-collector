@@ -28,6 +28,7 @@ type ConfigMetadata struct {
 	AllOf                []*ConfigMetadata          `mapstructure:"allOf,omitempty" json:"allOf,omitempty" yaml:"allOf,omitempty"`
 	Properties           map[string]*ConfigMetadata `mapstructure:"properties,omitempty" json:"properties,omitempty" yaml:"properties,omitempty"`
 	AdditionalProperties *ConfigMetadata            `mapstructure:"additionalProperties,omitempty" json:"additionalProperties,omitempty" yaml:"additionalProperties,omitempty"`
+	PatternProperties    map[string]*ConfigMetadata `mapstructure:"patternProperties,omitempty" json:"-" yaml:"patternProperties,omitempty"`
 	Required             []string                   `mapstructure:"required,omitempty" json:"required,omitempty" yaml:"required,omitempty"`
 	MinProperties        *int                       `mapstructure:"minProperties,omitempty" json:"minProperties,omitempty" yaml:"minProperties,omitempty"`
 	MaxProperties        *int                       `mapstructure:"maxProperties,omitempty" json:"maxProperties,omitempty" yaml:"maxProperties,omitempty"`
@@ -47,7 +48,7 @@ type ConfigMetadata struct {
 	ExclusiveMaximum     *float64                   `mapstructure:"exclusiveMaximum,omitempty" json:"exclusiveMaximum,omitempty" yaml:"exclusiveMaximum,omitempty"`
 	Minimum              *float64                   `mapstructure:"minimum,omitempty" json:"minimum,omitempty" yaml:"minimum,omitempty"`
 	ExclusiveMinimum     *float64                   `mapstructure:"exclusiveMinimum,omitempty" json:"exclusiveMinimum,omitempty" yaml:"exclusiveMinimum,omitempty"`
-	Defs                 map[string]*ConfigMetadata `mapstructure:"$defs,omitempty" json:"-" yaml:"$defs,omitempty"`
+	Defs                 map[string]*ConfigMetadata `mapstructure:"$defs,omitempty" json:"$defs,omitempty" yaml:"$defs,omitempty"`
 	// Additional custom fields
 	GoStruct   GoStructConfig `mapstructure:"go_struct,omitempty" json:"-" yaml:"go_struct,omitempty"`
 	GoType     string         `mapstructure:"x-customType,omitempty" json:"-" yaml:"x-customType,omitempty"`
@@ -55,14 +56,22 @@ type ConfigMetadata struct {
 	IsOptional bool           `mapstructure:"x-optional,omitempty" json:"-" yaml:"x-optional,omitempty"`
 	Embed      bool           `mapstructure:"embed,omitempty" json:"-" yaml:"embed,omitempty"`
 	// internal
-	ResolvedFrom string `mapstructure:"-" json:"-" yaml:"-"`
-	EmbeddedName string `mapstructure:"-" json:"-" yaml:"-"`
+	ResolvedFrom                string `mapstructure:"-" json:"-" yaml:"-"`
+	EmbeddedName                string `mapstructure:"-" json:"-" yaml:"-"`
+	AdditionalPropertiesAllowed *bool  `mapstructure:"-" json:"-" yaml:"-"`
+	InternalOnly                bool   `mapstructure:"-" json:"-" yaml:"-"`
+}
+
+type Metadata struct {
+	Config          *ConfigMetadata            `mapstructure:"config,omitempty" json:"config,omitempty" yaml:"config,omitempty"`
+	ExportedConfigs map[string]*ConfigMetadata `mapstructure:"exported_configs,omitempty" json:"exported_configs,omitempty" yaml:"exported_configs,omitempty"`
 }
 
 type GoStructConfig struct {
 	CustomValidator *CustomValidatorConfig `mapstructure:"custom_validator" json:"-" yaml:"custom_validator,omitempty"`
 	Anonymous       bool                   `mapstructure:"anonymous" json:"-" yaml:"anonymous,omitempty"`
 	IgnoreDefault   bool                   `mapstructure:"ignore_default" json:"-" yaml:"ignore_default,omitempty"`
+	FieldName       string                 `mapstructure:"field_name" json:"-" yaml:"field_name,omitempty"`
 }
 
 type CustomValidatorConfig struct {
@@ -89,13 +98,45 @@ func (md *ConfigMetadata) ToJSON() ([]byte, error) {
 	return json.MarshalIndent(md, "", "  ")
 }
 
+func (md *ConfigMetadata) MarshalJSON() ([]byte, error) {
+	type alias ConfigMetadata
+
+	if len(md.PatternProperties) == 0 && md.AdditionalPropertiesAllowed == nil {
+		return json.Marshal((*alias)(md))
+	}
+
+	type withSpecialFields struct {
+		*alias
+		AdditionalProperties any                        `json:"additionalProperties,omitempty"`
+		PatternProperties    map[string]*ConfigMetadata `json:"patternProperties,omitempty"`
+	}
+
+	out := withSpecialFields{
+		alias:             (*alias)(md),
+		PatternProperties: md.PatternProperties,
+	}
+	if md.AdditionalPropertiesAllowed != nil {
+		out.AdditionalProperties = *md.AdditionalPropertiesAllowed
+	}
+
+	return json.Marshal(out)
+}
+
 func (md *ConfigMetadata) Validate() error {
 	var errs error
-	if md.Type != "object" {
+
+	hasDefs := len(md.Defs) > 0
+	hasConfigFields := len(md.Properties) > 0 || len(md.AllOf) > 0
+	if md.Type != "object" && (md.Type != "" || !hasDefs || hasConfigFields) {
 		errs = errors.Join(errs, fmt.Errorf("config type must be \"object\", got %q", md.Type))
 	}
-	if len(md.Properties) == 0 && len(md.AllOf) == 0 {
+	if !hasDefs && !hasConfigFields {
 		errs = errors.Join(errs, errors.New("config must not be empty"))
+	}
+	for name, prop := range md.Properties {
+		if len(prop.Enum) > 0 && (prop.Type == "object" || prop.Type == "array") {
+			errs = errors.Join(errs, fmt.Errorf("property %q: enum is not supported for type %q", name, prop.Type))
+		}
 	}
 	return errs
 }

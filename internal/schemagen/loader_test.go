@@ -23,9 +23,10 @@ func TestLoader_LoadFromFile_Success(t *testing.T) {
 	schemaPath := filepath.Join(tempDir, "internal/metadata")
 	require.NoError(t, os.MkdirAll(schemaPath, 0o750))
 	schemaFile := filepath.Join(schemaPath, schemaFileName)
-	schemaContent := `title: "Test Schema"
-description: "A test schema"
-type: object
+	schemaContent := `config:
+  title: "Test Schema"
+  description: "A test schema"
+  type: object
 `
 	require.NoError(t, os.WriteFile(schemaFile, []byte(schemaContent), 0o600))
 
@@ -37,6 +38,28 @@ type: object
 	require.Equal(t, "Test Schema", result.Title)
 	require.Equal(t, "A test schema", result.Description)
 	require.Equal(t, "object", result.Type)
+}
+
+func TestLoader_LoadFromFile_ExportedConfigsOnly(t *testing.T) {
+	tempDir := t.TempDir()
+	schemaFile := filepath.Join(tempDir, schemaFileName)
+	schemaContent := `exported_configs:
+  sample_config:
+    type: object
+    properties:
+      endpoint:
+        type: string
+`
+	require.NoError(t, os.WriteFile(schemaFile, []byte(schemaContent), 0o600))
+
+	loader := NewLoader(tempDir).(*schemaLoader)
+
+	result, err := loader.loadFromFile(schemaFile)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, result.Defs, "sample_config")
+	require.Equal(t, "object", result.Defs["sample_config"].Type)
+	require.Contains(t, result.Defs["sample_config"].Properties, "endpoint")
 }
 
 func TestLoader_LoadFromFile_NotFound(t *testing.T) {
@@ -73,9 +96,7 @@ func TestLoader_LoadFromHTTP_Success(t *testing.T) {
 	// Create test HTTP server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`title: "HTTP Schema"
-type: string
-`))
+		_, _ = w.Write([]byte("config:\n  title: \"HTTP Schema\"\n  type: string\n"))
 	}))
 	defer server.Close()
 
@@ -85,9 +106,9 @@ type: string
 	defer func() { namespaceToURL["go.opentelemetry.io/collector"] = originalURL }()
 
 	tempDir := t.TempDir()
-	// Use mdatagenDir so resolveModuleVersion can find the module in go.mod
-	loader := NewLoader(mdatagenDir(t)).(*schemaLoader)
-	ref := *NewRef("go.opentelemetry.io/collector/scraper/scraperhelper.controller_config")
+	// Use schemagenDir so resolveModuleVersion can find confmap (a direct dep) without go get.
+	loader := NewLoader(schemagenDir(t)).(*schemaLoader)
+	ref := *NewRef("go.opentelemetry.io/collector/confmap.controller_config")
 
 	result, err := loader.loadFromHTTP(ref, filepath.Join(tempDir, ".schemas"))
 	require.NoError(t, err)
@@ -106,8 +127,8 @@ func TestLoader_LoadFromHTTP_NotFound(t *testing.T) {
 	defer func() { namespaceToURL["go.opentelemetry.io/collector"] = originalURL }()
 
 	tempDir := t.TempDir()
-	loader := NewLoader(mdatagenDir(t)).(*schemaLoader)
-	ref := *NewRef("go.opentelemetry.io/collector/scraper/scraperhelper.controller_config")
+	loader := NewLoader(schemagenDir(t)).(*schemaLoader)
+	ref := *NewRef("go.opentelemetry.io/collector/confmap.controller_config")
 
 	result, err := loader.loadFromHTTP(ref, filepath.Join(tempDir, ".schemas"))
 	require.ErrorIs(t, err, ErrNotFound)
@@ -125,8 +146,8 @@ func TestLoader_LoadFromHTTP_ServerError(t *testing.T) {
 	defer func() { namespaceToURL["go.opentelemetry.io/collector"] = originalURL }()
 
 	tempDir := t.TempDir()
-	loader := NewLoader(mdatagenDir(t)).(*schemaLoader)
-	ref := *NewRef("go.opentelemetry.io/collector/scraper/scraperhelper.controller_config")
+	loader := NewLoader(schemagenDir(t)).(*schemaLoader)
+	ref := *NewRef("go.opentelemetry.io/collector/confmap.controller_config")
 
 	result, err := loader.loadFromHTTP(ref, filepath.Join(tempDir, ".schemas"))
 	require.Error(t, err)
@@ -139,9 +160,9 @@ func TestLoader_TryLoad_WithVersion(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if strings.Contains(r.URL.Path, "v1.0.0") {
-			_, _ = w.Write([]byte(`title: "Versioned Schema"`))
+			_, _ = w.Write([]byte("config:\n  title: \"Versioned Schema\"\n"))
 		} else {
-			_, _ = w.Write([]byte(`title: "Main Version Schema"`))
+			_, _ = w.Write([]byte("config:\n  title: \"Main Version Schema\"\n"))
 		}
 	}))
 	defer server.Close()
@@ -160,6 +181,34 @@ func TestLoader_TryLoad_WithVersion(t *testing.T) {
 	require.Equal(t, "Versioned Schema", result.Title)
 }
 
+func TestLoader_TryLoad_ExportedConfigsOnly(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`exported_configs:
+  sample_config:
+    type: object
+    properties:
+      endpoint:
+        type: string
+`))
+	}))
+	defer server.Close()
+
+	originalURL := namespaceToURL["go.opentelemetry.io/collector"]
+	namespaceToURL["go.opentelemetry.io/collector"] = server.URL
+	defer func() { namespaceToURL["go.opentelemetry.io/collector"] = originalURL }()
+
+	loader := NewLoader(t.TempDir()).(*schemaLoader)
+	ref := *NewRef("go.opentelemetry.io/collector/test/path.sample_config")
+
+	result, err := loader.tryLoad(ref, "v1.0.0")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, result.Defs, "sample_config")
+	require.Equal(t, "object", result.Defs["sample_config"].Type)
+	require.Contains(t, result.Defs["sample_config"].Properties, "endpoint")
+}
+
 func TestLoader_PersistToFile_Success(t *testing.T) {
 	tempDir := t.TempDir()
 	loader := NewLoader(tempDir).(*schemaLoader)
@@ -173,13 +222,13 @@ func TestLoader_PersistToFile_Success(t *testing.T) {
 	err := loader.persistToFile(filePath, metadata)
 	require.NoError(t, err)
 
-	// Verify file was created
+	// Verify file was created and can be round-tripped via loadFromFile
 	require.FileExists(t, filePath)
 
-	content, err := os.ReadFile(filePath) // #nosec G304
+	roundTripped, err := loader.loadFromFile(filePath)
 	require.NoError(t, err)
-	require.Contains(t, string(content), "Persisted Schema")
-	require.Contains(t, string(content), "Test persistence")
+	require.Equal(t, "Persisted Schema", roundTripped.Title)
+	require.Equal(t, "Test persistence", roundTripped.Description)
 }
 
 func TestLoader_Load_CacheInteraction(t *testing.T) {
@@ -228,7 +277,7 @@ func TestLoader_Load_CachesOnFirstLoad(t *testing.T) {
 	schemaPath := filepath.Join(tempDir, "subdir")
 	require.NoError(t, os.MkdirAll(schemaPath, 0o750))
 	schemaFile := filepath.Join(schemaPath, schemaFileName)
-	require.NoError(t, os.WriteFile(schemaFile, []byte("title: Cached\ntype: object\n"), 0o600))
+	require.NoError(t, os.WriteFile(schemaFile, []byte("config:\n  title: Cached\n  type: object\n"), 0o600))
 
 	loader := NewLoader(tempDir).(*schemaLoader)
 	loader.rootDir = tempDir // bypass git
@@ -260,7 +309,7 @@ func TestLoader_Load_LocalAbsolutePath(t *testing.T) {
 	// Create schema at <repoRoot>/somepackage/config.schema.yaml
 	schemaDir := filepath.Join(tempDir, "somepackage")
 	require.NoError(t, os.MkdirAll(schemaDir, 0o750))
-	require.NoError(t, os.WriteFile(filepath.Join(schemaDir, schemaFileName), []byte("title: AbsoluteLocal\ntype: object\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(schemaDir, schemaFileName), []byte("config:\n  title: AbsoluteLocal\n  type: object\n"), 0o600))
 
 	loader := NewLoader(tempDir).(*schemaLoader)
 	loader.rootDir = tempDir // bypass git
@@ -276,7 +325,7 @@ func TestLoader_Load_LocalRelativePath(t *testing.T) {
 	tempDir := t.TempDir()
 	subDir := filepath.Join(tempDir, "subdir")
 	require.NoError(t, os.MkdirAll(subDir, 0o750))
-	require.NoError(t, os.WriteFile(filepath.Join(subDir, schemaFileName), []byte("title: RelativeLocal\ntype: object\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(subDir, schemaFileName), []byte("config:\n  title: RelativeLocal\n  type: object\n"), 0o600))
 
 	loader := NewLoader(tempDir).(*schemaLoader)
 	loader.rootDir = tempDir // bypass git
@@ -305,11 +354,11 @@ func TestLoader_LoadFromFile_ReadError(t *testing.T) {
 func TestLoader_LoadFromHTTP_FileCacheHit(t *testing.T) {
 	// Test that loadFromHTTP returns from the file cache when a schema is already persisted,
 	// without making any HTTP requests.
-	ref := *NewRef("go.opentelemetry.io/collector/scraper/scraperhelper.controller_config")
+	ref := *NewRef("go.opentelemetry.io/collector/confmap.controller_config")
 
 	// Resolve the real module version so we can place the file at the right path.
-	mdDir := mdatagenDir(t)
-	helper := NewLoader(mdDir).(*schemaLoader)
+	sgDir := schemagenDir(t)
+	helper := NewLoader(sgDir).(*schemaLoader)
 	version := helper.resolveModuleVersion(ref.Module())
 	if version == "" {
 		t.Skip("could not resolve module version, skipping file cache hit test")
@@ -319,12 +368,12 @@ func TestLoader_LoadFromHTTP_FileCacheHit(t *testing.T) {
 	fileCacheDir := filepath.Join(tempDir, ".schemas")
 	filePath := filepath.Join(fileCacheDir, version, ref.SchemaID(), schemaFileName)
 	require.NoError(t, os.MkdirAll(filepath.Dir(filePath), 0o750))
-	require.NoError(t, os.WriteFile(filePath, []byte("title: FileCached\ntype: object\n"), 0o600))
+	require.NoError(t, os.WriteFile(filePath, []byte("config:\n  title: FileCached\n  type: object\n"), 0o600))
 
 	// Use an httpClient that always panics to confirm no HTTP call is made.
 	loader := &schemaLoader{
 		cache:      make(map[string]*ConfigMetadata),
-		cd:         mdDir,
+		cd:         sgDir,
 		httpClient: &http.Client{},
 	}
 
@@ -342,7 +391,7 @@ func TestLoader_LoadFromHTTP_PersistWarning(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("title: PersistFail\ntype: object\n"))
+		_, _ = w.Write([]byte("config:\n  title: PersistFail\n  type: object\n"))
 	}))
 	defer server.Close()
 
@@ -356,8 +405,8 @@ func TestLoader_LoadFromHTTP_PersistWarning(t *testing.T) {
 	cacheDir := filepath.Join(tempDir, ".schemas")
 	require.NoError(t, os.MkdirAll(cacheDir, 0o750))
 
-	loader := NewLoader(mdatagenDir(t)).(*schemaLoader)
-	ref := *NewRef("go.opentelemetry.io/collector/scraper/scraperhelper.controller_config")
+	loader := NewLoader(schemagenDir(t)).(*schemaLoader)
+	ref := *NewRef("go.opentelemetry.io/collector/confmap.controller_config")
 
 	// Should still return the result even though persist fails (warning only)
 	result, err := loader.loadFromHTTP(ref, cacheDir)
@@ -370,7 +419,7 @@ func TestLoader_LoadFromHTTP_NonNotFoundFileError(t *testing.T) {
 	// fails with a non-ErrNotFound error (directory placed where file is expected).
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("title: AfterWarning\ntype: object\n"))
+		_, _ = w.Write([]byte("config:\n  title: AfterWarning\n  type: object\n"))
 	}))
 	defer server.Close()
 
@@ -378,11 +427,11 @@ func TestLoader_LoadFromHTTP_NonNotFoundFileError(t *testing.T) {
 	namespaceToURL["go.opentelemetry.io/collector"] = server.URL
 	defer func() { namespaceToURL["go.opentelemetry.io/collector"] = originalURL }()
 
-	mdDir := mdatagenDir(t)
-	ref := *NewRef("go.opentelemetry.io/collector/scraper/scraperhelper.controller_config")
+	sgDir := schemagenDir(t)
+	ref := *NewRef("go.opentelemetry.io/collector/confmap.controller_config")
 
 	// Resolve the real version so we can poison the file cache at the correct path
-	helper := NewLoader(mdDir).(*schemaLoader)
+	helper := NewLoader(sgDir).(*schemaLoader)
 	version := helper.resolveModuleVersion(ref.Module())
 	if version == "" {
 		t.Skip("could not resolve module version, skipping non-ErrNotFound warning test")
@@ -396,7 +445,7 @@ func TestLoader_LoadFromHTTP_NonNotFoundFileError(t *testing.T) {
 
 	loader := &schemaLoader{
 		cache:      make(map[string]*ConfigMetadata),
-		cd:         mdDir,
+		cd:         sgDir,
 		httpClient: &http.Client{},
 	}
 
@@ -552,5 +601,15 @@ func mdatagenDir(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
 	require.True(t, ok, "could not determine caller file")
-	return filepath.Join(filepath.Dir(file), "../..")
+	return filepath.Join(filepath.Dir(file), "../../cmd/mdatagen")
+}
+
+// schemagenDir returns the directory of this test file (internal/schemagen).
+// Use it as the loader's cwd when tests need packages.Load to resolve a module
+// version without invoking go get — confmap is a direct dep here and locally replaced.
+func schemagenDir(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	require.True(t, ok, "could not determine caller file")
+	return filepath.Dir(file)
 }
